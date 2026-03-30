@@ -72,12 +72,25 @@ def load_production_resources():
     act = sy.inverse_transform(y_seq).flatten()
     pre = sy.inverse_transform(preds_scaled[:, 1:2]).flatten() # Use Median (P50)
     
-    return model, sx, sy, train_cols, df_train, act, pre
+    # Calculate Split Indices for UI filtering
+    train_size = int(0.7 * len(df_train))
+    val_size = int(0.15 * len(df_train))
+    train_end = train_size
+    val_end = train_size + val_size
+    
+    splits = {
+        'Train': (0, max(0, train_end - 24)),
+        'Validation': (max(0, train_end - 24), max(0, val_end - 24)),
+        'Test': (max(0, val_end - 24), len(act)),
+        'Full History': (0, len(act))
+    }
+    
+    return model, sx, sy, train_cols, df_train, act, pre, splits
 
 # --- Execution ---
 try:
     with st.spinner("Synchronizing Neural Analytics..."):
-        model, sx, sy, train_cols, df_raw, eval_act, eval_pre = load_production_resources()
+        model, sx, sy, train_cols, df_raw, eval_act, eval_pre, splits = load_production_resources()
         
     st.markdown('<div class="main-title">SolarAI Intelligence Suite</div>', unsafe_allow_html=True)
 
@@ -155,12 +168,20 @@ try:
         st.plotly_chart(fig_f, width='stretch')
 
     with tab2:
+        # Split Selection
+        st.markdown("<h3 style='color:white;'>Performance Evaluation Dataset</h3>", unsafe_allow_html=True)
+        split_choice = st.selectbox("Select Data Split to Evaluate", ["Test", "Validation", "Train", "Full History"], key='split_selector')
+        start_idx, end_idx = splits[split_choice]
+        
+        split_act = eval_act[start_idx:end_idx]
+        split_pre = eval_pre[start_idx:end_idx]
+
         # Statistical Evidence (Precision)
-        mae = mean_absolute_error(eval_act, eval_pre)
-        rmse = np.sqrt(mean_squared_error(eval_act, eval_pre))
-        r2 = r2_score(eval_act, eval_pre)
-        mask = eval_act > 0.1
-        mape = mean_absolute_percentage_error(eval_act[mask], eval_pre[mask]) if mask.sum() > 0 else 0
+        mae = mean_absolute_error(split_act, split_pre) if len(split_act) > 0 else 0
+        rmse = np.sqrt(mean_squared_error(split_act, split_pre)) if len(split_act) > 0 else 0
+        r2 = r2_score(split_act, split_pre) if len(split_act) > 1 else 0
+        mask = split_act > 0.1
+        mape = mean_absolute_percentage_error(split_act[mask], split_pre[mask]) if mask.sum() > 0 else 0
         
         v1, v2, v3, v4 = st.columns(4)
         v1.markdown(f'<div class="metric-card"><div class="metric-lbl">Regression R²</div><div class="metric-val">{r2:.3f}</div></div>', unsafe_allow_html=True)
@@ -168,14 +189,14 @@ try:
         v3.markdown(f'<div class="metric-card"><div class="metric-lbl">RMSE Metric</div><div class="metric-val">{rmse:.3f}</div></div>', unsafe_allow_html=True)
         v4.markdown(f'<div class="metric-card"><div class="metric-lbl">MAPE Score</div><div class="metric-val">{mape:.1%}</div></div>', unsafe_allow_html=True)
         
-        st.markdown("<h3 style='color:white; margin-top:20px;'>Historical Ground Truth Correlation</h3>", unsafe_allow_html=True)
-        zoom = st.slider("Neural Feedback window", 50, len(eval_act), 1000)
+        st.markdown(f"<h3 style='color:white; margin-top:20px;'>{split_choice} Set Ground Truth Correlation</h3>", unsafe_allow_html=True)
+        zoom = st.slider("Neural Feedback window", min_value=min(10, len(split_act)), max_value=len(split_act), value=min(1000, len(split_act)))
         
         fig_e = go.Figure()
         # White Ground Truth
-        fig_e.add_trace(go.Scatter(y=eval_act[-zoom:], name="Solar Ground Truth", line=dict(color="#F8FAFC", width=1.5)))
+        fig_e.add_trace(go.Scatter(y=split_act[-zoom:], name="Solar Ground Truth", line=dict(color="#F8FAFC", width=1.5)))
         # Deep Orange Prediction
-        fig_e.add_trace(go.Scatter(y=eval_pre[-zoom:], name="Transformer Forecast", line=dict(color="#EA580C", width=2, dash='dot')))
+        fig_e.add_trace(go.Scatter(y=split_pre[-zoom:], name="Transformer Forecast", line=dict(color="#EA580C", width=2, dash='dot')))
         
         fig_e.update_layout(
             template="plotly_dark", plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
